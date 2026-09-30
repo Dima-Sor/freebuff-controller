@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-# 把 handover-merge.js 以 Base64 内嵌进 FreebuffController.cs：
-# 替换 HandoverMergeJsB64 常量引号里的内容（幂等，随时可重跑）。
-# build.bat / release.sh 在编译前自动调用；改了 JS 后重新编译即可生效。
-# 按字节读写，保持 C# 源文件原有的 CRLF 行尾不动。
+# Embeds handover-merge.js into FreebuffController.cs as Base64:
+# replaces the content inside the quotes of the HandoverMergeJsB64 constant
+# (idempotent, safe to re-run).
+# build.bat / release.sh call it before compiling; after editing the JS, just
+# rebuild.
+# Reads and writes bytes so the C# file keeps its original CRLF line endings.
 import base64
 import os
 import re
@@ -22,7 +24,7 @@ with open(cs_path, "rb") as f:
 pattern = re.compile(r'(HandoverMergeJsB64 = ")(?:[^"]*)(")')
 new_cs, n = pattern.subn(lambda m: m.group(1) + b64 + m.group(2), cs)
 if n == 0:
-    print("ERROR: FreebuffController.cs 里没找到 HandoverMergeJsB64 常量", file=sys.stderr)
+    print("ERROR: HandoverMergeJsB64 constant not found in FreebuffController.cs", file=sys.stderr)
     sys.exit(1)
 
 if new_cs != cs:

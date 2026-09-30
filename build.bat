@@ -1,10 +1,11 @@
 @echo off
 rem Rebuild FreebuffController.exe (output lands in this folder as
-rem FreebuffController.exe; rename to the Chinese display name if you like).
+rem FreebuffController.exe; rename it to whatever display name you like).
 set CSC=%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe
-rem 会话接力脚本以 Base64 内嵌进 exe，编译前先刷新它（需要 python3）。
+rem The session-handover script is embedded into the exe as Base64, so refresh
+rem it before compiling (needs python3).
 python "%~dp0tools\embed-handover.py" || (
-  echo EMBED FAILED ^(需要 python3^)
+  echo EMBED FAILED ^(needs python3^)
   exit /b 1
 )
 "%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -codepage:65001 ^

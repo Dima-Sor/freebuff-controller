@@ -1,31 +1,37 @@
-// Freebuff 多开控制器 — 会话接力合并脚本。
+// Freebuff контроллер мультиинстанса — скрипт слияния эстафеты сессий.
 //
-// 用 Freebuff 自带的 resources/bun/bun.exe 运行：bun:sqlite 直读两个实例的
-// desktop-v2.db，把选定会话（threads + messages + queue_items +
-// auto_run_decision_receipts + thread_deliveries）从来源库复制进目标库。
-// 控制器自身保持无 SQLite 依赖的单文件 exe。
+// Запускается штатным Freebuff resources/bun/bun.exe: bun:sqlite читает базы двух
+// экземпляров напрямую, а выбранные сессии (threads + messages + queue_items +
+// auto_run_decision_receipts + thread_deliveries) копируются из базы-источника
+// в базу-приёмник. Сам контроллер остаётся однофайловым exe без зависимости от SQLite.
 //
-// 用法：
+// Использование:
 //   bun handover-merge.js list  <srcDb>
 //   bun handover-merge.js merge <srcDb> <dstDb> <idsJson|@ids.json> [renamesJson|@renames.json]
-// ids/renames 直接传 JSON 或传 "@路径"（控制器走文件，避开命令行转义）。
-// 输出一行 JSON（UTF-8，stdout）：
+// ids/renames передаются как JSON или как "@путь" (контроллер идёт через файл,
+// обходя экранирование в командной строке).
+// Выводит одну строку JSON (UTF-8, stdout):
 //   {"ok":true,"action":"list","threads":[...]}
 //   {"ok":true,"action":"merge","copied":[...],"skipped":[...]}
 //   {"ok":false,"error":"..."}
-// 任何路径异常都走 ok:false；merge 在单事务里完成，失败即整体回滚。
+// Любая проблема с путями отдаёт ok:false; merge выполняется одной транзакцией,
+// при сбое откатывается целиком.
 //
-// 复制规则：
-// - 幂等：目标库已有的 thread id 一律跳过，绝不覆盖。
-// - 工作区解耦：thread 指向目标库中同一 root_path 的 projects 行（缺失时
-//   自动创建，这是会话外键 project_id 的归属），来源/目标打开哪个工作区
-//   互不影响。
-// - 引擎私有状态清零（turn_state / harness_state / auto_run 账本 /
-//   sponsored 令牌 / freebuff_instance_id / attention 未读 / world_snapshot），
-//   接过去的账号从干净的「空闲」会话继续，不背上一账号的运行时欠账。
-// - 列白名单：所有 INSERT 只写目标库真实存在的列（PRAGMA 交集），
-//   Freebuff 版本更替增删列时不会拼出坏 SQL；目标库自身的列迁移交给
-//   orchestrator 启动时的 upgrade 流程。
+// Правила копирования:
+// - Идемпотентность: thread id, уже существующие в базе-приёмнике, всегда
+//   пропускаются, перезаписи нет.
+// - Развязка рабочих областей: thread ссылается на projects с тем же root_path в
+//   базе-приёмнике (если строки нет, она создаётся автоматически — это и есть
+//   project_id для внешнего ключа сессии); какую рабочую область открыл
+//   источник, а какую приёмник — не важно.
+// - Приватное состояние движка обнуляется (turn_state / harness_state /
+//   реестр auto_run / токены sponsored / freebuff_instance_id / непрочитанные
+//   attention / world_snapshot), поэтому принявший сессию аккаунт продолжает
+//   с чистого состояния «свободен» и не наследует runtime-долги предыдущего.
+// - Белый список колонок: все INSERT пишут только реально существующие в
+//   базе-приёмнике колонки (пересечение по PRAGMA), поэтому при смене версии
+//   Freebuff битый SQL не собирается; миграцию колонок самой базы-приёмника
+//   делает upgrade-процесс orchestrator при старте.
 
 var Database = globalThis.Database || require("bun:sqlite").Database;
 
@@ -33,7 +39,7 @@ function out(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-// argv[i]：内联 JSON，或 "@file"（读文件里的 JSON）。
+// argv[i]: JSON строкой или "@file" (JSON читается из файла).
 function argJson(i, fallback) {
   var v = process.argv[i];
   if (!v) return fallback;
@@ -46,10 +52,11 @@ function argJson(i, fallback) {
 
 function die(msg) {
   out({ ok: false, error: String(msg) });
-  process.exit(0); // 控制器只解析 stdout JSON，退出码无意义
+  process.exit(0); // контроллер разбирает только JSON из stdout, код выхода не важен
 }
 
-// 只读打开；万一 bun 的选项名对不上，退回普通打开（文件仍可读）。
+// Открытие только на чтение; если имя опции у bun не совпало — откатываемся на
+// обычное (файл остаётся читаемым).
 function openRO(path) {
   try {
     return new Database(path, { readonly: true });
@@ -64,7 +71,7 @@ function tableCols(db, table) {
   });
 }
 
-// 把 rowObj 收窄到 dstCols 里存在的列后 INSERT OR IGNORE。
+// Сужаем rowObj до колонок, присутствующих в dstCols, и делаем INSERT OR IGNORE.
 function insertRow(db, table, rowObj, dstCols) {
   var cols = [];
   var params = {};
@@ -110,9 +117,11 @@ function listThreads(srcPath) {
   }
 }
 
-// 确保目标库存在 root_path 对应的 projects 行并返回其 id。正常情况下目标
-// 实例自己打开过同一个工作区、行已存在；缺失时补一行（优先沿用来源的
-// project_id——它由路径派生，同一台机器上不会变；id 撞车时换随机 id）。
+// Проверяем, что в базе-приёмнике есть строка projects с этим root_path, и
+// возвращаем её id. Обычно экземпляр-приёмник уже открывал ту же рабочую
+// область и строка на месте; если нет — добавляем (предпочитая project_id
+//   источника: он выводится из пути и на одной машине не меняется; при
+//   занятом id берём случайный).
 function ensureProject(dst, rootPath, preferredId) {
   var found = dst
     .query("SELECT id FROM projects WHERE root_path = $p")
@@ -139,8 +148,8 @@ function ensureProject(dst, rootPath, preferredId) {
 }
 
 function mergeThreads(srcPath, dstPath, ids, renames) {
-  if (!Array.isArray(ids) || ids.length === 0) die("没有要接力的会话");
-  if (!dstPath || dstPath === srcPath) die("目标库缺失或与来源相同");
+  if (!Array.isArray(ids) || ids.length === 0) die("нет сессий для переноса");
+  if (!dstPath || dstPath === srcPath) die("база-приёмник отсутствует или совпадает с источником");
   if (!renames || typeof renames !== "object") renames = {};
 
   var src = openRO(srcPath);
@@ -156,7 +165,7 @@ function mergeThreads(srcPath, dstPath, ids, renames) {
     var dstDelivCols = tableCols(dst, "thread_deliveries");
 
     var projCache = {};
-    var dstThreadStmt = null; // 每行列集可能不同，逐行构建
+    var dstThreadStmt = null; // набор колонок у строк разный, собираем построчно
 
     dst.transaction(function () {
       for (var id of ids) {
@@ -171,14 +180,15 @@ function mergeThreads(srcPath, dstPath, ids, renames) {
           .query("SELECT 1 FROM threads WHERE id = $id")
           .get({ $id: id });
         if (exists) {
-          skipped.push(id); // 幂等：同 id 会话绝不覆盖
+          skipped.push(id); // идемпотентность: сессия с тем же id не перезаписывается
           continue;
         }
 
         var row = {};
         for (var col of srcThreadCols) row[col] = th[col];
 
-        // 引擎私有状态清零；目标库没有对应列时 insertRow 会自动丢弃。
+        // Обнуляем приватное состояние движка; если в базе-приёмнике нет таких
+        // колонок, insertRow отбросит их сам.
         row.project_id = ensureProject(dst, th.project_path, th.project_id);
         row.turn_state = "idle";
         row.queue_paused = 0;
@@ -220,7 +230,7 @@ function mergeThreads(srcPath, dstPath, ids, renames) {
           .query("SELECT * FROM queue_items WHERE thread_id = $id")
           .all({ $id: id })) {
           var st = String(qi.state || "").toLowerCase();
-          if (st === "running" || st === "claimed") continue; // 上一账号的运行时残留
+          if (st === "running" || st === "claimed") continue; // остатки runtime от прошлого аккаунта
           insertRow(dst, "queue_items", qi, dstQueueCols);
         }
 
@@ -249,10 +259,10 @@ function mergeThreads(srcPath, dstPath, ids, renames) {
 try {
   var mode = process.argv[2];
   if (mode === "list") {
-    if (!process.argv[3]) die("缺少来源库路径");
+    if (!process.argv[3]) die("не указан путь к базе-источнику");
     listThreads(process.argv[3]);
   } else if (mode === "merge") {
-    if (!process.argv[3] || !process.argv[4]) die("缺少来源/目标库路径");
+    if (!process.argv[3] || !process.argv[4]) die("не указаны пути к базе-источнику и базе-приёмнику");
     mergeThreads(
       process.argv[3],
       process.argv[4],

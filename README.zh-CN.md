@@ -2,6 +2,10 @@
 
 **[中文](README.zh-CN.md) · [English](README.en.md) · [Русский](README-RU.md)**
 
+> 本页是上游中文原文。**本仓库的 Release 是俄语构建**（[下载](https://github.com/Dima-Sor/freebuff-controller/releases)）；需要中文 exe 请用 [上游 Releases](https://github.com/Ximmmmmmm/freebuff-controller/releases)。
+>
+> This page is the original upstream Chinese text. **The Releases in this repo are the Russian build** ([download](https://github.com/Dima-Sor/freebuff-controller/releases)); for the Chinese exe use the [upstream Releases](https://github.com/Ximmmmmmm/freebuff-controller/releases).
+
 一个 Windows 桌面小工具：让 [Freebuff](https://www.freebuff.com) 桌面版支持**多开**，并且**每个窗口可以登录不同的账号**。
 
 A small Windows utility that lets the Freebuff desktop app run multiple instances simultaneously — each with its own independent account.
