@@ -1,5 +1,11 @@
 # 更新日志
 
+> [中文](README.zh-CN.md) · [English](README.en.md) · [Русский](README-RU.md)
+>
+> 本文件是上游原版的历史。俄语分支的改动见 [CHANGELOG-RU.md](CHANGELOG-RU.md)。
+> This file is the upstream history. For the Russian fork see [CHANGELOG-RU.md](CHANGELOG-RU.md).
+
+
 > 每条只记两件事：**改了什么**、**对用的你有什么影响**。逐次提交的完整过程看 `git log`。
 > `release.sh` 发布时会自动抓本版那一节当 Release 说明（版本号取自 exe 的 `FileVersion`，
 > 所以小标题必须写成 `## vX.Y.Z`）。
